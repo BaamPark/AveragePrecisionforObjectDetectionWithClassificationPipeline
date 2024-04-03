@@ -8,12 +8,14 @@ from PIL import Image
 import cv2
 from transformers import pipeline
 from logger_config import logger
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt 
 import pandas as pd
 
 
 def main():
-    videoset_path = Path("/home/beomseok/ppe_data/dataset_test/2.24.23 sim without bed-trauma 1 above bed")
+    videoset_path = Path("/home/beomseok/ppe_data/dataset_test/ppe vanishing pen simulation-trauma 1 above bed")
+    # videoset_path = Path("/home/beomseok/ppe_data/dataset_test/wanzhao sim-trauma 1 above bed")
+    # videoset_path = Path("/home/beomseok/ppe_data/dataset_test/2.24.23 sim without bed-trauma 1 above bed")
     h_ga_gi_detector = YOLO("/home/beomseok/PPE_cleaned/ultralytics/runs/detect/data_collorjitter_aug_exp_with_11sets/weights/best.pt")
     mask_classifier = pipeline("image-classification", model="stage2/transformer_results/dir25", device=0)
     obj_cls_list = ["rc", "nc", "ma", "mi"]
@@ -49,8 +51,9 @@ def main():
             predictions_df = compute_confusion_matrix_by_iou(gt_bboxes_per_frame, pred_bboxes_with_conf_per_frame, predictions_df)
 
         sorted_predictions_df = predictions_df.sort_values(by='confidence', ascending=False)
-        ap_score, precision_list, recall_list = compute_ap_score(sorted_predictions_df, num_total_gt_boxes)
+        ap_score, precision_list, recall_list = compute_ap11_score(sorted_predictions_df, num_total_gt_boxes)
         ap_for_each_cls_dict[obj_cls] = ap_score
+
         plot_precision_recall_curve(precision_list, recall_list, ap_score, obj_cls, ax)
         
         print({k: round(v, 3) for k, v in ap_for_each_cls_dict.items()})
@@ -209,6 +212,47 @@ def compute_confusion_matrix_by_iou(gt_bboxes_per_frame: list, pred_bboxes_with_
 
     return predictions_df
 
+# AP score with 11 points interpolation
+def compute_ap11_score(sorted_predictions_df:pd.DataFrame, num_total_gt_boxes:int):
+    num_total_tp = sorted_predictions_df['is_tp'].sum() 
+    total_fn = num_total_gt_boxes - num_total_tp
+
+    precision_list = []
+    recall_list = []
+    cumulative_tp = 0
+    cumulative_fp = 0
+    ap11_list = []
+    ap11_precision_list = []
+    ap11_recall_list = [i/10 for i in range(11)]
+
+    for index, row in sorted_predictions_df.iterrows():
+        if row['is_tp']:
+            cumulative_tp += 1
+        else:
+            cumulative_fp += 1
+
+        if cumulative_tp + cumulative_fp == 0:
+            precision = 0
+        else:
+            precision = cumulative_tp / (cumulative_tp + cumulative_fp)
+
+        if cumulative_tp + total_fn == 0:
+            recall = 0
+        else:
+            recall = cumulative_tp / (cumulative_tp + total_fn)
+
+        precision_list.append(precision)
+        recall_list.append(recall)
+
+    for recall_threshold in ap11_recall_list:
+        relevant_precisions = [p for r, p in zip(recall_list, precision_list) if r >= recall_threshold]
+        if relevant_precisions:
+            ap11_precision_list.append(max(relevant_precisions))
+        else:
+            ap11_precision_list.append(0.0)
+
+    ap11_score = sum(ap11_precision_list) / 11
+    return ap11_score, ap11_precision_list, ap11_recall_list
 
 def compute_ap_score(sorted_predictions_df:pd.DataFrame, num_total_gt_boxes:int):
     num_total_tp = sorted_predictions_df['is_tp'].sum() 
